@@ -35,6 +35,22 @@ services:
     tags:
       - { name: oro_importexport.normalizer, priority: 100 }
 
+  oro_akeneo.importexport.normalizer.file_item:
+    class: Oro\Bundle\AkeneoBundle\ImportExport\Serializer\Normalizer\FileItemNormalizer
+    public: false
+    arguments:
+      - '@oro_akeneo.importexport.normalizer.file'
+    tags:
+      - { name: oro_importexport.normalizer, priority: 100 }
+
+  oro_akeneo.importexport.normalizer.file:
+    class: Oro\Bundle\AkeneoBundle\ImportExport\Serializer\Normalizer\FileNormalizer
+    public: false
+    arguments:
+      - '@oro_attachment.serializer.file_normalizer'
+    tags:
+      - { name: oro_importexport.normalizer, priority: 100 }
+
   oro_akeneo.integration.connector.category:
     class: "%oro_akeneo.integration.connector.category.class%"
     arguments:
@@ -116,7 +132,6 @@ services:
     class: '%oro_akeneo.importexport.strategy.attribute.class%'
     parent: oro_entity_config.importexport.strategy.entity_field.add_or_replace
     calls:
-      - [setFieldHelper, ['@oro_entity.helper.field_helper']]
       - [setConfigManager, ['@oro_entity_config.config_manager']]
       - [setImportStrategyHelper, ['@oro_akeneo.strategy.import.helper']]
 
@@ -188,6 +203,15 @@ services:
       - [setSchemaUpdateFilter, ['@oro_akeneo.placeholder.schema_update_filter']]
     tags:
       - { name: oro_integration.connector, type: product, channel_type: oro_akeneo }
+
+  oro_akeneo.integration.connector.brand:
+    class: 'Oro\Bundle\AkeneoBundle\Integration\Connector\BrandConnector'
+    arguments:
+      - '@oro_importexport.context_registry'
+      - '@oro_integration.logger.strategy'
+      - '@oro_integration.provider.connector_context_mediator'
+    tags:
+      - { name: oro_integration.connector, type: brand, channel_type: oro_akeneo }
 
   oro_akeneo.importexport.data_converter.product:
     class: '%oro_akeneo.importexport.data_converter.product.class%'
@@ -388,3 +412,29 @@ services:
     parent: oro_pricing.importexport.writer.product_price
     calls:
       - [setPriceBuilder, ["@oro_pricing.builder.combined_price_list_builder_facade"]]
+
+  oro_akeneo.importexport.processor.brand:
+    parent: oro_integration.importexport.processor.import
+    public: true
+    calls:
+      - [setDataConverter, ["@oro_akeneo.importexport.data_converter.brand"]]
+      - [setStrategy, ['@oro_akeneo.importexport.strategy.brand']]
+      - [setEntityName, ['Oro\Bundle\ProductBundle\Entity\Brand']]
+      - [setContextRegistry, ["@oro_importexport.context_registry"]]
+
+  oro_akeneo.importexport.strategy.brand:
+    class: 'Oro\Bundle\AkeneoBundle\ImportExport\Strategy\BrandImportStrategy'
+    parent: oro_locale.importexport.strategy.localized_fallback_value_aware
+    calls:
+      - [setImportStrategyHelper, ['@oro_akeneo.strategy.import.helper']]
+      - [setOwnerHelper, ['@oro_akeneo.importexport.strategy.default_owner_helper']]
+
+  oro_akeneo.importexport.data_converter.brand:
+    class: 'Oro\Bundle\AkeneoBundle\ImportExport\DataConverter\BrandDataConverter'
+    arguments:
+      - '@oro_entity.doctrine_helper'
+      - '@oro_entity.helper.field_helper'
+      - '@oro_entity_config.config_manager'
+      - '@oro_config.manager'
+      - '@oro_entity_config.slug.generator'
+      - '%kernel.project_dir%/var/import_export/akeneo'

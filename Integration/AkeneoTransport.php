@@ -2,6 +2,7 @@
 
 namespace Oro\Bundle\AkeneoBundle\Integration;
 
+use Akeneo\Pim\ApiClient\Exception\NotFoundHttpException;
 use Gaufrette\Filesystem;
 use Knp\Bundle\GaufretteBundle\FilesystemMap;
 use Oro\Bundle\AkeneoBundle\Client\AkeneoClientFactory;
@@ -9,71 +10,48 @@ use Oro\Bundle\AkeneoBundle\Entity\AkeneoSettings;
 use Oro\Bundle\AkeneoBundle\Form\Type\AkeneoSettingsType;
 use Oro\Bundle\AkeneoBundle\Integration\Iterator\AttributeFamilyIterator;
 use Oro\Bundle\AkeneoBundle\Integration\Iterator\AttributeIterator;
+use Oro\Bundle\AkeneoBundle\Integration\Iterator\BrandIterator;
 use Oro\Bundle\AkeneoBundle\Integration\Iterator\ProductIterator;
 use Oro\Bundle\AkeneoBundle\Settings\DataProvider\SyncProductsDataProvider;
 use Oro\Bundle\IntegrationBundle\Entity\Transport;
 use Oro\Bundle\CurrencyBundle\Config\DefaultCurrencyConfigProvider;
+use Psr\Log\LoggerAwareTrait;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Intl\Intl;
 
 class AkeneoTransport implements AkeneoTransportInterface
 {
+    use LoggerAwareTrait;
+
     const PAGE_SIZE = 100;
 
-    /**
-     * @var array
-     */
     private $attributes = [];
 
-    /**
-     * @var array
-     */
     private $familyVariants = [];
 
-    /**
-     * @var array
-     */
     private $families = [];
 
-    /**
-     * @var array
-     */
     private $measureFamilies = [];
 
-    /**
-     * @var AkeneoClientFactory
-     */
+    private $attributeMapping = [];
+
+    /** @var AkeneoClientFactory */
     private $clientFactory;
 
-    /**
-     * @var AkeneoPimExtendableClientInterface
-     */
+    /** @var AkeneoPimExtendableClientInterface */
     private $client;
 
-    /**
-     * @var DefaultCurrencyConfigProvider
-     */
+    /** @var DefaultCurrencyConfigProvider */
     private $configProvider;
 
-    /**
-     * @var AkeneoSettings
-     */
+    /** @var AkeneoSettings */
     private $transportEntity;
 
-    /**
-     * @var AkeneoSearchBuilder
-     */
+    /** @var AkeneoSearchBuilder */
     private $akeneoSearchBuilder;
 
-    /**
-     * @var Filesystem
-     */
+    /** @var Filesystem */
     private $filesystem;
-
-    /**
-     * @var LoggerInterface
-     */
-    private $logger;
 
     public function __construct(
         AkeneoClientFactory $clientFactory,
@@ -243,7 +221,8 @@ class AkeneoTransport implements AkeneoTransportInterface
                 $this->logger,
                 $this->attributes,
                 $this->familyVariants,
-                $this->measureFamilies
+                $this->measureFamilies,
+                $this->getAttributeMapping()
             );
         }
 
@@ -256,7 +235,8 @@ class AkeneoTransport implements AkeneoTransportInterface
             $this->logger,
             $this->attributes,
             $this->familyVariants,
-            $this->measureFamilies
+            $this->measureFamilies,
+            $this->getAttributeMapping()
         );
     }
 
@@ -283,7 +263,8 @@ class AkeneoTransport implements AkeneoTransportInterface
             $this->logger,
             $this->attributes,
             $this->familyVariants,
-            $this->measureFamilies
+            $this->measureFamilies,
+            $this->getAttributeMapping()
         );
     }
 
@@ -346,7 +327,7 @@ class AkeneoTransport implements AkeneoTransportInterface
         return $familtyAttributes;
     }
 
-    public function downloadAndSaveMediaFile(string $code)
+    public function downloadAndSaveMediaFile(string $code): void
     {
         $path = sprintf('akeneo/%s', $code);
         if ($this->filesystem->has($path)) {
@@ -369,6 +350,66 @@ class AkeneoTransport implements AkeneoTransportInterface
         } catch (\Throwable $e) {
             $this->logger->critical(
                 'Error during saving media file.',
+                ['message' => $e->getMessage(), 'exception' => $e]
+            );
+
+            return;
+        }
+    }
+
+    public function downloadAndSaveAsset(string $code, string $file): void
+    {
+        $path = sprintf('akeneo/%s', $file);
+        if ($this->filesystem->has($path)) {
+            return;
+        }
+
+        try {
+            $content = $this->client->getAssetReferenceFileApi()->downloadFromNotLocalizableAsset($code)->getContents();
+        } catch (\Throwable $e) {
+            $this->logger->critical(
+                'Error on downloading asset.',
+                ['message' => $e->getMessage(), 'exception' => $e]
+            );
+
+            return;
+        }
+
+        try {
+            $this->filesystem->write($path, $content, true);
+        } catch (\Throwable $e) {
+            $this->logger->critical(
+                'Error during saving asset.',
+                ['message' => $e->getMessage(), 'exception' => $e]
+            );
+
+            return;
+        }
+    }
+
+    public function downloadAndSaveReferenceEntityMediaFile(string $code): void
+    {
+        $path = sprintf('akeneo/%s', $code);
+        if ($this->filesystem->has($path)) {
+            return;
+        }
+
+        try {
+            $content = $this->client->getReferenceEntityMediaFileApi()->download($code)->getContents();
+        } catch (\Throwable $e) {
+            $this->logger->critical(
+                'Error on downloading asset.',
+                ['message' => $e->getMessage(), 'exception' => $e]
+            );
+
+            return;
+        }
+
+        try {
+            $this->filesystem->write($path, $content, true);
+        } catch (\Throwable $e) {
+            $this->logger->critical(
+                'Error during saving asset.',
                 ['message' => $e->getMessage(), 'exception' => $e]
             );
 
@@ -427,6 +468,51 @@ class AkeneoTransport implements AkeneoTransportInterface
             foreach (($measurementFamily['units'] ?? []) as $unit) {
                 $this->measureFamilies[$unit['code']] = $unit['symbol'];
             }
+        }
+    }
+
+    protected function getAttributeMapping(): array
+    {
+        if ($this->attributeMapping) {
+            return $this->attributeMapping;
+        }
+
+        $attributesMappings = trim(
+            $this->transportEntity->getAkeneoAttributesMapping() ?? AkeneoSettings::DEFAULT_ATTRIBUTES_MAPPING,
+            ';:'
+        );
+
+        if (!empty($attributesMappings)) {
+            $attributesMapping = explode(';', $attributesMappings);
+            foreach ($attributesMapping as $attributeMapping) {
+                list($akeneoAttribute, $systemAttribute) = explode(':', $attributeMapping);
+                if (!isset($akeneoAttribute, $systemAttribute)) {
+                    continue;
+                }
+
+                $this->attributeMapping[$systemAttribute] = $akeneoAttribute;
+            }
+        }
+
+        return $this->attributeMapping;
+    }
+
+    public function getBrands(): \Traversable
+    {
+        $brandReferenceEntityCode = $this->transportEntity->getAkeneoBrandReferenceEntityCode();
+        if (!$brandReferenceEntityCode) {
+            return new \EmptyIterator();
+        }
+
+        try {
+            return new BrandIterator(
+                $this->client->getReferenceEntityRecordApi()->all($brandReferenceEntityCode),
+                $this->client,
+                $this->logger,
+                $this
+            );
+        } catch (NotFoundHttpException $e) {
+            return new \EmptyIterator();
         }
     }
 }

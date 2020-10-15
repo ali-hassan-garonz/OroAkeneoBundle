@@ -4,11 +4,13 @@ namespace Oro\Bundle\AkeneoBundle\ImportExport\Strategy;
 
 use Doctrine\Common\Collections\Collection;
 use Oro\Bundle\AttachmentBundle\Entity\File;
+use Oro\Bundle\AttachmentBundle\Entity\FileItem;
 use Oro\Bundle\CatalogBundle\Entity\Category;
 use Oro\Bundle\EntityExtendBundle\Entity\AbstractEnumValue;
 use Oro\Bundle\EntityExtendBundle\Tools\ExtendHelper;
 use Oro\Bundle\LocaleBundle\Entity\LocalizedFallbackValue;
 use Oro\Bundle\LocaleBundle\ImportExport\Normalizer\LocalizationCodeFormatter;
+use Oro\Bundle\ProductBundle\Entity\Brand;
 use Oro\Bundle\ProductBundle\Entity\Product;
 use Oro\Bundle\ProductBundle\ImportExport\Strategy\ProductStrategy;
 
@@ -44,6 +46,19 @@ class ProductImportStrategy extends ProductStrategy
     protected function beforeProcessEntity($entity)
     {
         $this->setOwner($entity);
+
+        $fields = $this->fieldHelper->getRelations(Product::class);
+        foreach ($fields as $field) {
+            if ($this->isFileItemValue($field)) {
+                /** @var Collection $collection */
+                $collection = $this->fieldHelper->getObjectValue($entity, $field['name']);
+                foreach ($collection as $fileItem) {
+                    if ($fileItem instanceof FileItem && !$fileItem->getFile()) {
+                        $collection->removeElement($fileItem);
+                    }
+                }
+            }
+        }
 
         return parent::beforeProcessEntity($entity);
     }
@@ -81,6 +96,17 @@ class ProductImportStrategy extends ProductStrategy
             $entity->setInventoryStatus($inventoryStatus);
         }
 
+        $fields = $this->fieldHelper->getRelations(Product::class);
+        foreach ($fields as $field) {
+            if ($this->isFileItemValue($field)) {
+                /** @var Collection $collection */
+                $collection = $this->fieldHelper->getObjectValue($entity, $field['name']);
+                foreach ($collection as $fileItem) {
+                    $this->fieldHelper->setObjectValue($fileItem, sprintf('product_%s', $field['name']), $entity);
+                }
+            }
+        }
+
         $this->existingProducts = [];
 
         return parent::afterProcessEntity($entity);
@@ -99,12 +125,23 @@ class ProductImportStrategy extends ProductStrategy
         if ($entity instanceof Category && $entity->getAkeneoCode()) {
             return $this->databaseHelper->findOneBy(
                 Category::class,
-                ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $entity->getChannel()]
+                ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $this->getChannel()]
+            );
+        }
+
+        if ($entity instanceof Brand && $entity->getAkeneoCode()) {
+            return $this->databaseHelper->findOneBy(
+                Brand::class,
+                ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $this->getChannel()]
             );
         }
 
         if ($entity instanceof File) {
             return $searchContext[$entity->getOriginalFilename()] ?? null;
+        }
+
+        if ($entity instanceof FileItem) {
+            return $searchContext[$entity->getFile()->getOriginalFilename()] ?? null;
         }
 
         if (is_a($entity, $this->localizedFallbackValueClass, true)) {
@@ -131,12 +168,23 @@ class ProductImportStrategy extends ProductStrategy
         if ($entity instanceof Category && $entity->getAkeneoCode()) {
             return $this->databaseHelper->findOneBy(
                 Category::class,
-                ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $entity->getChannel()]
+                ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $this->getChannel()]
+            );
+        }
+
+        if ($entity instanceof Brand && $entity->getAkeneoCode()) {
+            return $this->databaseHelper->findOneBy(
+                Brand::class,
+                ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $this->getChannel()]
             );
         }
 
         if ($entity instanceof File) {
             return $searchContext[$entity->getOriginalFilename()] ?? null;
+        }
+
+        if ($entity instanceof FileItem) {
+            return $searchContext[$entity->getFile()->getOriginalFilename()] ?? null;
         }
 
         if (is_a($entity, $this->localizedFallbackValueClass, true)) {
@@ -262,11 +310,19 @@ class ProductImportStrategy extends ProductStrategy
             'slugs',
             'slugPrototypes',
             'slugPrototypesWithRedirect',
-            'inventory_status'
+            'inventory_status',
         ];
 
         if (is_a($entityName, Product::class, true) && in_array($fieldName, $excludeProductFields)) {
             return true;
+        }
+
+        $allowedProductFields = [
+            'brand',
+        ];
+
+        if (is_a($entityName, Product::class, true) && in_array($fieldName, $allowedProductFields)) {
+            return false;
         }
 
         return parent::isFieldExcluded($entityName, $fieldName, $itemData);
@@ -286,11 +342,18 @@ class ProductImportStrategy extends ProductStrategy
 
     protected function generateSearchContextForRelationsUpdate($entity, $entityName, $fieldName, $isPersistRelation)
     {
+        $searchContext = parent::generateSearchContextForRelationsUpdate(
+            $entity,
+            $entityName,
+            $fieldName,
+            $isPersistRelation
+        );
+
         $fields = $this->fieldHelper->getRelations($entityName);
 
         if ($this->isFileValue($fields[$fieldName])) {
             $existingEntity = $this->findExistingEntity($entity);
-            if ($existingEntity instanceof Product) {
+            if ($existingEntity) {
                 $file = $this->fieldHelper->getObjectValue($existingEntity, $fieldName);
 
                 if ($file instanceof File && $file->getOriginalFilename()) {
@@ -298,17 +361,32 @@ class ProductImportStrategy extends ProductStrategy
                 }
             }
 
-            return parent::generateSearchContextForRelationsUpdate($entity, $entityName, $fieldName, $isPersistRelation);
+            return $searchContext;
+        }
+
+        if ($this->isFileItemValue($fields[$fieldName])) {
+            $existingEntity = $this->findExistingEntity($entity);
+            if ($existingEntity) {
+                $collection = $this->fieldHelper->getObjectValue($existingEntity, $fieldName);
+
+                foreach ($collection as $fileItem) {
+                    if ($fileItem instanceof FileItem && $fileItem->getFile()->getOriginalFilename()) {
+                        $searchContext[$fileItem->getFile()->getOriginalFilename()] = $fileItem;
+                    }
+                }
+            }
+
+            return $searchContext;
         }
 
         if (!$this->isLocalizedFallbackValue($fields[$fieldName])) {
-            return parent::generateSearchContextForRelationsUpdate($entity, $entityName, $fieldName, $isPersistRelation);
+            return $searchContext;
         }
 
         /** @var Collection $importedCollection */
         $importedCollection = $this->fieldHelper->getObjectValue($entity, $fieldName);
         if ($importedCollection->isEmpty()) {
-            return parent::generateSearchContextForRelationsUpdate($entity, $entityName, $fieldName, $isPersistRelation);
+            return $searchContext;
         }
 
         $existingEntity = $this->findExistingEntity($entity);
@@ -324,11 +402,16 @@ class ProductImportStrategy extends ProductStrategy
             return $searchContext;
         }
 
-        return parent::generateSearchContextForRelationsUpdate($entity, $entityName, $fieldName, $isPersistRelation);
+        return $searchContext;
     }
 
     private function isFileValue(array $field): bool
     {
         return $this->fieldHelper->isRelation($field) && is_a($field['related_entity_name'], File::class, true);
+    }
+
+    private function isFileItemValue(array $field): bool
+    {
+        return $this->fieldHelper->isRelation($field) && is_a($field['related_entity_name'], FileItem::class, true);
     }
 }

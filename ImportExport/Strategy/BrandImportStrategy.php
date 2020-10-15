@@ -6,52 +6,40 @@ use Doctrine\Common\Collections\Collection;
 use Oro\Bundle\AttachmentBundle\Entity\File;
 use Oro\Bundle\AttachmentBundle\Entity\FileItem;
 use Oro\Bundle\BatchBundle\Item\Support\ClosableInterface;
-use Oro\Bundle\CatalogBundle\Entity\Category;
-use Oro\Bundle\IntegrationBundle\Entity\Channel;
 use Oro\Bundle\LocaleBundle\Entity\LocalizedFallbackValue;
 use Oro\Bundle\LocaleBundle\ImportExport\Normalizer\LocalizationCodeFormatter;
 use Oro\Bundle\LocaleBundle\ImportExport\Strategy\LocalizedFallbackValueAwareStrategy;
+use Oro\Bundle\ProductBundle\Entity\Brand;
 
-/**
- * Strategy to import categories.
- */
-class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy implements ClosableInterface
+class BrandImportStrategy extends LocalizedFallbackValueAwareStrategy implements ClosableInterface
 {
     use ImportStrategyAwareHelperTrait;
     use OwnerTrait;
-
-    /**
-     * @var Category[]
-     *
-     * Cache existing category request in scope of a single row processing to avoid excess DB queries
-     */
-    private $existingCategories = [];
-
-    /** @var int */
-    private $rootCategoryId;
 
     public function close()
     {
         $this->reflectionProperties = [];
         $this->cachedEntities = [];
 
-        $this->existingCategories = [];
-        $this->rootCategoryId = null;
+        $this->databaseHelper->onClear();
 
         $this->clearOwnerCache();
-
-        $this->databaseHelper->onClear();
     }
 
-    protected function beforeProcessEntity($entity)
+    public function beforeProcessEntity($entity)
     {
         $this->setOwner($entity);
 
-        if ($entity instanceof Category) {
-            $parent = $entity->getParentCategory();
-            if ($parent instanceof Category && !$parent->getId()) {
-                $existingParent = $this->findExistingEntity($parent) ?? $this->getRootCategory();
-                $entity->setParentCategory($existingParent);
+        $fields = $this->fieldHelper->getRelations(Brand::class);
+        foreach ($fields as $field) {
+            if ($this->isFileItemValue($field)) {
+                /** @var Collection $collection */
+                $collection = $this->fieldHelper->getObjectValue($entity, $field['name']);
+                foreach ($collection as $fileItem) {
+                    if ($fileItem instanceof FileItem && !$fileItem->getFile()) {
+                        $collection->removeElement($fileItem);
+                    }
+                }
             }
         }
 
@@ -60,50 +48,27 @@ class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy impleme
 
     protected function afterProcessEntity($entity)
     {
-        $this->existingCategories = [];
+        $fields = $this->fieldHelper->getRelations(Brand::class);
+        foreach ($fields as $field) {
+            if ($this->isFileItemValue($field)) {
+                /** @var Collection $collection */
+                $collection = $this->fieldHelper->getObjectValue($entity, $field['name']);
+                foreach ($collection as $fileItem) {
+                    $this->fieldHelper->setObjectValue($fileItem, sprintf('product_%s', $field['name']), $entity);
+                }
+            }
+        }
 
         return $entity;
     }
 
-    private function getRootCategory()
-    {
-        if (null === $this->rootCategoryId) {
-            $channelId = $this->context->getOption('channel');
-            $channel = $this->doctrineHelper->getEntityRepository(Channel::class)->find($channelId);
-
-            $rootCategoryId = false;
-            if ($channel->getTransport()->getRootCategory()) {
-                $rootCategoryId = $channel->getTransport()->getRootCategory()->getId();
-            }
-            $this->rootCategoryId = $rootCategoryId;
-        }
-
-        if ($this->rootCategoryId) {
-            return $this->doctrineHelper->getEntityReference(Category::class, $this->rootCategoryId);
-        }
-
-        return null;
-    }
-
     protected function findExistingEntity($entity, array $searchContext = [])
     {
-        if ($entity instanceof Category && $entity->getAkeneoCode()) {
-            $category = $this->databaseHelper->findOneBy(
-                Category::class,
+        if ($entity instanceof Brand && $entity->getAkeneoCode()) {
+            return $this->databaseHelper->findOneBy(
+                Brand::class,
                 ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $this->getChannel()]
             );
-
-            if ($category) {
-                $this->existingCategories[$entity->getAkeneoCode()] = $category;
-            }
-
-            return $category;
-        }
-
-        if (is_a($entity, $this->localizedFallbackValueClass, true)) {
-            $localizationCode = LocalizationCodeFormatter::formatName($entity->getLocalization());
-
-            return $searchContext[$localizationCode] ?? null;
         }
 
         if ($entity instanceof File) {
@@ -112,6 +77,12 @@ class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy impleme
 
         if ($entity instanceof FileItem) {
             return $searchContext[$entity->getFile()->getOriginalFilename()] ?? null;
+        }
+
+        if (is_a($entity, $this->localizedFallbackValueClass, true)) {
+            $localizationCode = LocalizationCodeFormatter::formatName($entity->getLocalization());
+
+            return $searchContext[$localizationCode] ?? null;
         }
 
         return parent::findExistingEntity($entity, $searchContext);
@@ -119,23 +90,11 @@ class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy impleme
 
     protected function findExistingEntityByIdentityFields($entity, array $searchContext = [])
     {
-        if ($entity instanceof Category && $entity->getAkeneoCode()) {
-            $category = $this->databaseHelper->findOneBy(
-                Category::class,
+        if ($entity instanceof Brand && $entity->getAkeneoCode()) {
+            return $this->databaseHelper->findOneBy(
+                Brand::class,
                 ['akeneo_code' => $entity->getAkeneoCode(), 'channel' => $this->getChannel()]
             );
-
-            if ($category) {
-                $this->existingCategories[$entity->getAkeneoCode()] = $category;
-            }
-
-            return $category;
-        }
-
-        if (is_a($entity, $this->localizedFallbackValueClass, true)) {
-            $localizationCode = LocalizationCodeFormatter::formatName($entity->getLocalization());
-
-            return $searchContext[$localizationCode] ?? null;
         }
 
         if ($entity instanceof File) {
@@ -144,6 +103,12 @@ class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy impleme
 
         if ($entity instanceof FileItem) {
             return $searchContext[$entity->getFile()->getOriginalFilename()] ?? null;
+        }
+
+        if (is_a($entity, $this->localizedFallbackValueClass, true)) {
+            $localizationCode = LocalizationCodeFormatter::formatName($entity->getLocalization());
+
+            return $searchContext[$localizationCode] ?? null;
         }
 
         return parent::findExistingEntityByIdentityFields($entity, $searchContext);
@@ -222,9 +187,6 @@ class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy impleme
         }
     }
 
-    /**
-     * {@inheritdoc}
-     */
     protected function updateContextCounters($entity)
     {
         $identifier = $this->databaseHelper->getIdentifier($entity);
@@ -233,22 +195,6 @@ class CategoryImportStrategy extends LocalizedFallbackValueAwareStrategy impleme
         } else {
             $this->context->incrementAddCount();
         }
-    }
-
-    protected function isFieldExcluded($entityName, $fieldName, $itemData = null)
-    {
-        $excludeCategoryFields = [
-            'childCategories',
-            'slugs',
-            'slugPrototypes',
-            'slugPrototypesWithRedirect',
-        ];
-
-        if (is_a($entityName, Category::class, true) && in_array($fieldName, $excludeCategoryFields)) {
-            return true;
-        }
-
-        return parent::isFieldExcluded($entityName, $fieldName, $itemData);
     }
 
     protected function mapCollections(Collection $importedCollection, Collection $sourceCollection)

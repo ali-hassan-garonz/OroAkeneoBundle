@@ -10,7 +10,6 @@ use Oro\Bundle\AkeneoBundle\Tools\EnumSynchronizer;
 use Oro\Bundle\EntityBundle\EntityConfig\DatagridScope;
 use Oro\Bundle\EntityBundle\ORM\DoctrineHelper;
 use Oro\Bundle\EntityConfigBundle\Attribute\AttributeTypeRegistry;
-use Oro\Bundle\EntityConfigBundle\Config\ConfigInterface;
 use Oro\Bundle\EntityConfigBundle\Entity\FieldConfigModel;
 use Oro\Bundle\EntityConfigBundle\ImportExport\Writer\AttributeWriter as BaseAttributeWriter;
 use Oro\Bundle\EntityExtendBundle\Entity\EnumValueTranslation;
@@ -29,6 +28,9 @@ use Oro\Bundle\TranslationBundle\Manager\TranslationManager;
 class AttributeWriter extends BaseAttributeWriter implements StepExecutionAwareInterface
 {
     const ATTRIBUTE_LABELS_CONTEXT_KEY = 'attributeLabels';
+    const MAX_SIZE = 10;
+    const MAX_WIDTH = 100;
+    const MAX_HEIGHT = 100;
 
     /** @var TranslationManager */
     private $translationManager;
@@ -232,8 +234,6 @@ class AttributeWriter extends BaseAttributeWriter implements StepExecutionAwareI
      */
     protected function setAttributeData(FieldConfigModel $fieldConfigModel)
     {
-        parent::setAttributeData($fieldConfigModel);
-
         $extendProvider = $this->configManager->getProvider('extend');
         $importExportProvider = $this->configManager->getProvider('importexport');
 
@@ -244,58 +244,43 @@ class AttributeWriter extends BaseAttributeWriter implements StepExecutionAwareI
         $className = $fieldConfigModel->getEntity()->getClassName();
         $fieldName = $fieldConfigModel->getFieldName();
 
-        $importExportConfig = $importExportProvider->getConfig($className, $fieldName);
-        $importExportConfig->set('source', 'akeneo');
-
-        if (in_array($fieldConfigModel->getType(), ['image', 'file'], true)) {
-            $importExportConfig->set('full', false);
-            $attachmentProvider = $this->configManager->getProvider('attachment');
-            $attachmentConfig = $attachmentProvider->getConfig($className, $fieldName);
-            $attachmentConfig->set('file_applications', ['default', 'commerce']);
-            $attachmentConfig->set('acl_protected', true);
-            $this->configManager->persist($attachmentConfig);
-        }
-
         $this->fieldNameMapping = $this->cacheProvider->fetch('attribute_fieldNameMapping') ?? [];
         $sourceName = $this->fieldNameMapping[$fieldName] ?? null;
         if (!$sourceName) {
-            throw new \InvalidArgumentException(
-                sprintf('Unknown source name for "%s::%s"', $className, $fieldName)
-            );
+            throw new \InvalidArgumentException(sprintf('Unknown source name for "%s::%s"', $className, $fieldName));
         }
+
+        $importExportConfig = $importExportProvider->getConfig($className, $fieldName);
+        $importExportConfig->set('source', 'akeneo');
         $importExportConfig->set('source_name', $sourceName);
         $this->configManager->persist($importExportConfig);
 
         $attributeProvider = $this->configManager->getProvider('attribute');
-        $searchProvider = $this->configManager->getProvider('search');
         $attributeConfig = $attributeProvider->getConfig($className, $fieldName);
-        $searchConfig = $searchProvider->getConfig($className, $fieldName);
-        $type = $this->attributeTypeRegistry->getAttributeType($fieldConfigModel);
+
         $extendConfig = $extendProvider->getConfig($className, $fieldName);
-
-        $this->fieldTypeMapping = $this->cacheProvider->fetch('attribute_fieldTypeMapping') ?? [];
-        $importedFieldType = $this->fieldTypeMapping[$fieldConfigModel->getFieldName()] ?? null;
-
         if ($extendConfig->is('state', ExtendScope::STATE_NEW)) {
+            $type = $this->attributeTypeRegistry->getAttributeType($fieldConfigModel);
+
             $this->saveDatagridConfig($className, $fieldName);
             $this->saveViewConfig($className, $fieldName);
             $this->saveFormConfig($className, $fieldName);
-            $this->setSearchConfig($searchConfig, $importedFieldType);
+            $this->saveAttachmentConfig($className, $fieldName, $fieldConfigModel->getType());
+            $this->saveSearchConfig($className, $fieldName, $type->isSearchable($fieldConfigModel));
 
-            $attributeConfig->set('searchable', $type->isSearchable());
-            $searchConfig->set('searchable', $type->isSearchable());
-            $attributeConfig->set('filterable', $type->isFilterable());
-
-            $attributeConfig->set('visible', true);
-            $attributeConfig->set('enabled', true);
+            $attributeConfig->set('searchable', $type->isSearchable($fieldConfigModel));
+            $attributeConfig->set('filterable', $type->isFilterable($fieldConfigModel));
+            $attributeConfig->set('sortable', $type->isSortable($fieldConfigModel));
+            $attributeConfig->set('visible', false);
+            $attributeConfig->set('enabled', false);
         }
 
         $attributeConfig->set('is_attribute', true);
         $attributeConfig->set('is_global', false);
         $attributeConfig->set('organization_id', $this->getOrganizationId());
-
         $this->configManager->persist($attributeConfig);
-        $this->configManager->persist($searchConfig);
+
+        parent::setAttributeData($fieldConfigModel);
 
         if (RelationType::MANY_TO_MANY !== $fieldConfigModel->getType()) {
             return;
@@ -315,6 +300,8 @@ class AttributeWriter extends BaseAttributeWriter implements StepExecutionAwareI
 
         $extendConfig->set('relation_key', $relationKey);
 
+        $this->fieldTypeMapping = $this->cacheProvider->fetch('attribute_fieldTypeMapping') ?? [];
+        $importedFieldType = $this->fieldTypeMapping[$fieldConfigModel->getFieldName()] ?? null;
         $fieldType = $importedFieldType === 'pim_catalog_text' ? 'string' : 'text';
 
         $extendConfig->set('target_title', [$fieldType]);
@@ -373,9 +360,29 @@ class AttributeWriter extends BaseAttributeWriter implements StepExecutionAwareI
         $this->configManager->persist($config);
     }
 
-    private function setSearchConfig(ConfigInterface $searchConfig, ?string $importedFieldType): void
+    private function saveAttachmentConfig(string $className, string $fieldName, string $type): void
     {
-        $searchable = !in_array($importedFieldType, ['pim_catalog_file', 'pim_catalog_date']);
+        if (!in_array($type, ['image', 'file', 'multiFile', 'multiImage'], true)) {
+            return;
+        }
+
+        $attachmentProvider = $this->configManager->getProvider('attachment');
+        $attachmentConfig = $attachmentProvider->getConfig($className, $fieldName);
+        $attachmentConfig->set('file_applications', ['default', 'commerce']);
+        $attachmentConfig->set('acl_protected', true);
+        $attachmentConfig->set('maxsize', self::MAX_SIZE);
+        $attachmentConfig->set('width', self::MAX_WIDTH);
+        $attachmentConfig->set('height', self::MAX_HEIGHT);
+
+        $this->configManager->persist($attachmentConfig);
+    }
+
+    private function saveSearchConfig(string $className, string $fieldName, bool $searchable): void
+    {
+        $searchProvider = $this->configManager->getProvider('search');
+        $searchConfig = $searchProvider->getConfig($className, $fieldName);
         $searchConfig->set('searchable', $searchable);
+
+        $this->configManager->persist($searchConfig);
     }
 }

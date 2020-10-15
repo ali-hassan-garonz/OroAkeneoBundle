@@ -8,36 +8,31 @@ use Psr\Log\LoggerInterface;
 
 class ProductIterator extends AbstractIterator
 {
-    /**
-     * @var array
-     */
     private $attributes = [];
 
-    /**
-     * @var array
-     */
     private $familyVariants = [];
 
-    /**
-     * @var array
-     */
     private $measureFamilies = [];
 
-    /**
-     * AttributeIterator constructor.
-     */
+    private $attributeMapping = [];
+
+    private $assets = [];
+
     public function __construct(
         ResourceCursorInterface $resourceCursor,
         AkeneoPimExtendableClientInterface $client,
         LoggerInterface $logger,
-        array $attributes,
-        array $familyVariants,
-        array $measureFamilies
+        array $attributes = [],
+        array $familyVariants = [],
+        array $measureFamilies = [],
+        array $attributeMapping = []
     ) {
         parent::__construct($resourceCursor, $client, $logger);
+
         $this->attributes = $attributes;
         $this->familyVariants = $familyVariants;
         $this->measureFamilies = $measureFamilies;
+        $this->attributeMapping = $attributeMapping;
     }
 
     /**
@@ -47,8 +42,10 @@ class ProductIterator extends AbstractIterator
     {
         $product = $this->resourceCursor->current();
 
+        $this->setSku($product);
         $this->setValueAttributeTypes($product);
         $this->setFamilyVariant($product);
+        $this->setAssetCode($product);
 
         return $product;
     }
@@ -91,5 +88,46 @@ class ProductIterator extends AbstractIterator
         if (isset($this->familyVariants[$model['family_variant']])) {
             $model['family_variant'] = $this->familyVariants[$model['family_variant']];
         }
+    }
+
+    private function setAssetCode(array &$product): void
+    {
+        foreach ($product['values'] as $code => &$values) {
+            foreach ($values as $key => &$value) {
+                if ($value['type'] !== 'pim_assets_collection') {
+                    continue;
+                }
+
+                $codes = [];
+                foreach ((array)$value['data'] as &$code) {
+                    if (array_key_exists($code, $this->assets)) {
+                        $codes[$code] = $this->assets[$code];
+
+                        continue;
+                    }
+
+                    $asset = $this->client->getAssetApi()->get($code);
+                    if (!empty($asset['reference_files'][0]['code'])) {
+                        $this->assets[$code] = $asset['reference_files'][0]['code'];
+
+                        $codes[$code] = $this->assets[$code];
+                    }
+                }
+                $value['data'] = $codes;
+            }
+        }
+    }
+
+    private function setSku(array &$product): void
+    {
+        $sku = $product['identifier'] ?? $product['code'];
+
+        if (array_key_exists('sku', $this->attributeMapping)) {
+            if (!empty($product['values'][$this->attributeMapping['sku']][0]['data'])) {
+                $sku = $product['values'][$this->attributeMapping['sku']][0]['data'];
+            }
+        }
+
+        $product['sku'] = (string)$sku;
     }
 }
