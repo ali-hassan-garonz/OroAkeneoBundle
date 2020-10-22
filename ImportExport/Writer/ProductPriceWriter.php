@@ -23,7 +23,7 @@ class ProductPriceWriter extends BaseWriter
     {
         parent::write($items);
 
-        $this->priceBuilder->rebuildAll(time());
+        $this->priceBuilder->rebuildAll();
     }
 
 }

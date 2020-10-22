@@ -345,6 +345,8 @@ services:
     class: 'Oro\Bundle\AkeneoBundle\ImportExport\Reader\ProductPriceReader'
     arguments:
       - "@oro_importexport.context_registry"
+    calls:
+      - [setDoctrineHelper, ["@oro_entity.doctrine_helper"]]
 
   oro_akeneo.importexport.reader.product_image:
     class: 'Oro\Bundle\AkeneoBundle\ImportExport\Reader\ProductImageReader'
