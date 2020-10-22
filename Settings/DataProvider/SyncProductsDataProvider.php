@@ -21,7 +21,6 @@ class SyncProductsDataProvider implements SyncProductsDataProviderInterface
     {
         return [
             self::ALL_PRODUCTS,
-            self::PUBLISHED,
         ];
     }
 
