@@ -25,9 +25,9 @@
         "cweagans/composer-patches": "~1.6"
     },
     "repositories": {
-        "oro": {
-            "type": "composer",
-            "url": "https://packagist.orocrm.com"
+        "vcs": {
+            "type": "vcs",
+            "url": "https://github.com/ali-hassan-garonz/OroAkeneoBundle"
         },
         "asset-packagist": {
             "type": "composer",
