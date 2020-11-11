@@ -23,7 +23,8 @@ class ProductPriceWriter extends BaseWriter
     {
         parent::write($items);
 
-        $this->priceBuilder->rebuildAll();
+        // Replaced with rebuild commandline in cronjob
+        // $this->priceBuilder->rebuildAll(time() + 30);
     }
 
 }
