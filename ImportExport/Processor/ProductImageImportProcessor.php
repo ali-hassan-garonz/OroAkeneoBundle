@@ -6,9 +6,11 @@ use Oro\Bundle\IntegrationBundle\ImportExport\Processor\StepExecutionAwareImport
 use Oro\Bundle\ProductBundle\Entity\Product;
 use Oro\Bundle\ProductBundle\Entity\ProductImage;
 use Oro\Bundle\ProductBundle\Entity\ProductImageType;
+use Psr\Log\LoggerAwareTrait;
 
 class ProductImageImportProcessor extends StepExecutionAwareImportProcessor
 {
+    use LoggerAwareTrait;
     /**
      * {@inheritdoc}
      */
@@ -37,6 +39,9 @@ class ProductImageImportProcessor extends StepExecutionAwareImportProcessor
                     ]
                 )
             );
+
+            // Set image original filename
+            $object->getImage()->setOriginalFilename($object->getImage()->getFile()->getFileName());
 
             if ($this->strategy) {
                 $object = $this->strategy->process($object);

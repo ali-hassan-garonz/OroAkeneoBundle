@@ -29,6 +29,7 @@ class AttributeFamilyImportStrategy extends LocalizedFallbackValueAwareStrategy 
     use OwnerTrait;
 
     private const GROUP_CODE_GENERAL = 'general';
+    private const GROUP_CODE_IMAGES = 'images';
 
     /**
      * @var AttributeManager
@@ -170,6 +171,7 @@ class AttributeFamilyImportStrategy extends LocalizedFallbackValueAwareStrategy 
 
     private function setSystemAttributes(AttributeFamily $entity): void
     {
+        $imagesGroup = $this->getImagesGroup($entity);
         $defaultGroup = $this->getDefaultGroup($entity);
         $systemAttributes = $this->attributeManager->getSystemAttributesByClass($entity->getEntityClass());
 
@@ -178,6 +180,10 @@ class AttributeFamilyImportStrategy extends LocalizedFallbackValueAwareStrategy 
                 $attributeGroupRelation = new AttributeGroupRelation();
                 $attributeGroupRelation->setEntityConfigFieldId($systemAttribute->getId());
 
+                if ($systemAttribute->getFieldName() == self::GROUP_CODE_IMAGES){
+                    $imagesGroup->addAttributeRelation($attributeGroupRelation);
+                    continue;
+                }
                 $defaultGroup->addAttributeRelation($attributeGroupRelation);
             }
         }
@@ -185,6 +191,7 @@ class AttributeFamilyImportStrategy extends LocalizedFallbackValueAwareStrategy 
         $defaultGroup->setDefaultLabel(
             $this->translator->trans('oro.entity_config.form.default_group_label')
         );
+        $entity->addAttributeGroup($imagesGroup);
         $entity->addAttributeGroup($defaultGroup);
     }
 
@@ -358,6 +365,22 @@ class AttributeFamilyImportStrategy extends LocalizedFallbackValueAwareStrategy 
         }
 
         return $defaultGroup;
+    }
+
+    private function getImagesGroup(AttributeFamily $entity): AttributeGroup
+    {
+        $imagesGroup = $entity->getAttributeGroup(self::GROUP_CODE_IMAGES);
+
+        if (!$imagesGroup) {
+            $imagesGroup = new AttributeGroup();
+            $imagesGroup->setCode(self::GROUP_CODE_IMAGES);
+        }
+
+        $imagesGroup->setDefaultLabel(
+            $this->translator->trans('oro.product.sections.images')
+        );
+
+        return $imagesGroup;
     }
 
     protected function mapCollections(Collection $importedCollection, Collection $sourceCollection)
